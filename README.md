@@ -1,5 +1,5 @@
 # jzon
-JZON is JSON Zipped Object Notation
+JZON is JSON Zipped Object Notation.  This could be used as a json compressor and decompressor; though this is probably best used to compress large json objects that you use statically in your projects.
 
 Usage:
 
