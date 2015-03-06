@@ -7,7 +7,7 @@ Usage:
 
 var data = [{ person: 'Fred' }, { person: 'Mary' }, { person: 'John' }, { person: 'Mark' }];
 
-// Zipped object... z.f is the format, z.z is the zipped data.
+// Compressed object... z.f is the format, z.c is the compressed data.
 
 var c = JZON.compress(data);
 
