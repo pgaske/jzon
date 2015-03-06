@@ -1,23 +1,56 @@
-var jzon = jzon || (function (){
+/*
+** Version 0.2
+**
+** Changes:
+** 		0.2
+** 		Previous version was not encoding arrays containing objects correctly.  Revamped the encoder to
+**		handle objects of very different shapes.  Additionally, the difference between arrays and objects
+**		is now stored in the encoder output.
+** 
+*/
+var JZON = JZON || (function () {
+	var OBJECT_FORMAT_SLOT = 0,
+		ARRAY_FORMAT_SLOT = 1,
+		INVALID_SLOT = -1;
+
+	// Is thing an array?
 	function isArray(thing) {
 		return toString.call(thing) === '[object Array]';
 	}
 
+	// Is thing an object?
 	function isObject(thing) {
-		return thing != null && typeof thing === 'object';
+		return thing != null && !isArray(thing) && typeof thing === 'object';
 	}
 
-	function extract(data, format) {
+	// Extracts the format of the suppled object.
+	function _extractFormat(data, format) {
 		if (isArray(data)) {
-			for (var i = 0; i < data.length; i++) {
-				extract(data[i], format);
+			format = format || Array(2);
+
+			for (var i = 0; i < data.length; i += 1) {
+				var n = isObject(data[i]) ? OBJECT_FORMAT_SLOT : isArray(data[i]) ? ARRAY_FORMAT_SLOT : INVALID_SLOT;
+
+				if (n !== INVALID_SLOT) {
+					format[n] = _extractFormat(data[i], format[n]);
+				}
 			}
-		} else if (isObject(data)) {
+		}
+		
+		else if (isObject(data)) {
+			format = format || {};
+
 			for (var name in data) {
-				if (data.hasOwnProperty(name)) {
-					var key = name + (isArray(data[name]) ? "[]" : "");
-					format[key] = format[key] || {};
-					extract(data[name], format[key]);
+				if (!data.hasOwnProperty(name)) {
+					continue;
+				}
+
+				if (isArray(data[name])) {
+					format[name + '['] = _extractFormat(data[name], format[name + '[']);
+				} else if (isObject(data[name])) {
+					format[name + '{'] = _extractFormat(data[name], format[name + '{']);
+				} else {
+					format[name] = null;
 				}
 			}
 		}
@@ -25,56 +58,86 @@ var jzon = jzon || (function (){
 		return format;
 	}
 
-	function encode(format) {
-		var names = [];
-
-		for (name in format) {
-			names.push(name);
-		}
-
-		var result = [];
-
-		for (var i = 0; i < names.length; i++) {
-			result.push(names[i]);
-			if (/\[\]$/.test(names[i])) {
-				result.push(encode(format[names[i]]));
-			}
-		}
-
-		return result;
-	}
-
-	function extractFormat(data) {
-		var format = extract(data, {});
-		return encode(format);
-	}
-
-	function zip(data, format) {
-		var result = [];
-
+	function typeMatch(data, format) {
 		if (isArray(data)) {
-			data.forEach(function (v) {
-				result.push(zip(v, format));
-			});
-		} else if (isObject(data)) {
-			for (var i = 0; i < format.length; i += 1) {
-				var key = format[i];
+			return isArray(format);
+		}
 
-				if (/\[\]$/.test(key)) {
-					key = key.substring(0, key.length - 2);
-					if (data.hasOwnProperty(key)) {
-						result.push(zip(data[key], format[i + 1]));
-						// skip the array definition
-						i += 1;
-					} else {
-						result.push(undefined);
-					}
+		if (isObject(data)) {
+			return isObject(format);
+		}
+
+		return format === undefined;
+	}
+
+	function _compressData(data, format) {
+		if (!typeMatch(data, format)) {
+			throw new Error('Data does not match format.');
+		}
+
+		var result = [];
+
+		if (isArray(format)) {
+			for (var i = 0; i < data.length; i += 1) {
+				var d = data[i];
+				if (isObject(d)) {
+					result.push({ '%': _compressData(d, format[OBJECT_FORMAT_SLOT]) })
 				} else {
-					if (data.hasOwnProperty(key)) {
-						result.push(data[key]);
+					result.push(_compressData(d, isArray(d) ? format[ARRAY_FORMAT_SLOT] : undefined));
+				}
+			}
+		} else if (isObject(format)) {
+			for (var name in format) {
+				if (/\[$/.test(name)) {
+					var dname = name.substr(0, name.length - 1);
+					result.push(_compressData(data[dname], format[name]));
+				} else if (/\{$/.test(name)) {
+					var dname = name.substr(0, name.length - 1);
+					result.push({ '%': data.hasOwnProperty(dname) ? _compressData(data[dname], format[name]) : null });
+				} else {
+					result.push(data.hasOwnProperty(name) ? data[name] : null)
+				}
+			}
+		} else {
+			result = data;
+		}
+
+		return result;
+	}
+
+	function _compress(data) {
+		var format = _extractFormat(data),
+			compressed = _compressData(data, format);
+
+		return { f: format, c: compressed };
+	}
+
+	function _uncompressData(format, compressed) {
+		var result = isArray(format) ? [] : isObject(format) ? {} : compressed;
+
+		if (isArray(format)) {
+			for (var i = 0; i < compressed.length; i++) {
+				var c = compressed[i];
+				result.push(_uncompressData(isArray(c) ? format[ARRAY_FORMAT_SLOT] : isObject(c) ? format[OBJECT_FORMAT_SLOT] : undefined, c));
+			}
+		} else if (isObject(format)) {
+			var i = 0;
+			var c = compressed['%'];
+
+			for (var name in format) {
+				if (c !== null) {
+					if (/\[$/.test(name)) {
+						result[name.substr(0, name.length - 1)] = _uncompressData(format[name], c[i]);
+					} else if (/\{$/.test(name)) {
+						if (c[i] && c[i]['%']) {
+							result[name.substr(0, name.length - 1)] = _uncompressData(format[name], c[i]);
+						}
 					} else {
-						result.push(undefined);
+						if (c[i] != null) {
+							result[name] = c[i];
+						}
 					}
+					i += 1;
 				}
 			}
 		}
@@ -82,61 +145,14 @@ var jzon = jzon || (function (){
 		return result;
 	}
 
-	function unzip(format, zipped) {
-		// These must be arrays.
-		if (!isArray(zipped) || !isArray(format)) {
-			return null;
-		}
-
-		if (isArray(zipped[0])) {
-			// Array of objects.
-			var result = [];
-
-			zipped.forEach(function (v) {
-				result.push(unzip(format, v));
-			});
-
-			return result;
-		} else {
-			// Just one object.
-			var result = {};
-
-			for (var f = 0, z = 0; f < format.length; f += 1, z += 1) {
-				var name = format[f];
-
-				if (/\[\]$/.test(name)) {
-					name = name.substring(0, name.length - 2);
-					// Sub object.
-					if (zipped[z] !== null && zipped[z] !== undefined) {
-						result[name] = unzip(format[f + 1], zipped[z]);
-					}
-					f += 1;
-				} else {
-					// Property.
-					if (zipped[z] !== null && zipped[z] !== undefined) {
-						result[name] = zipped[z];
-					}
-				}
-			}
-
-			return result;
-		}
+	function _uncompress(compressed) {
+		return _uncompressData(compressed.f, compressed.c);
 	}
 
+	// The api.
 	return {
-		zip: function (data) {
-			var format = extractFormat(data);
+		compress: _compress,
 
-			return {
-				f: format,
-				z: zip(data, format)
-			};
-		},
-
-		unzip: function (zip) {
-			return unzip(zip.f, zip.z);
-		},
-
-		manualUnzip: unzip
+		uncompress: _uncompress
 	};
 }());
