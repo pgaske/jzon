@@ -9,11 +9,11 @@ var data = [{ person: 'Fred' }, { person: 'Mary' }, { person: 'John' }, { person
 
 // Zipped object... z.f is the format, z.z is the zipped data.
 
-var z = jzon.zip(data);
+var c = JZON.compress(data);
 
 // Unzip the data.
 
-var reData = jzon.unzip(z);
+var u = JZON.uncompress(z);
 
 // Should be the same.
 
